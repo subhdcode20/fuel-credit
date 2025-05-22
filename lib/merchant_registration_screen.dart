@@ -1,7 +1,6 @@
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
-
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:confetti/confetti.dart';
 import 'package:file_picker/file_picker.dart';
@@ -9,7 +8,6 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/foundation.dart' show Uint8List, kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:gallery_saver/gallery_saver.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:qr_flutter/qr_flutter.dart';
@@ -75,6 +73,8 @@ class _MerchantRegistrationScreenState extends State<MerchantRegistrationScreen>
   // QR code data
   String? _qrCodeData;
   Uint8List? _qrImageBytes;
+
+  get result => null;
 
   @override
   void initState() {
@@ -656,7 +656,6 @@ class _MerchantRegistrationScreenState extends State<MerchantRegistrationScreen>
           final file = File(qrImagePath);
           await file.writeAsBytes(qrImage.buffer.asUint8List());
 
-          final result = await GallerySaver.saveImage(qrImagePath);
           if (result == true) {
             _showSnackBar('QR code saved to gallery', success: true);
           } else {
@@ -748,7 +747,7 @@ class _MerchantRegistrationScreenState extends State<MerchantRegistrationScreen>
         final file = File(qrImagePath);
         await file.writeAsBytes(qrImage.buffer.asUint8List());
 
-        final result = await GallerySaver.saveImage(qrImagePath);
+
         if (result == true) {
           _showSnackBar('QR code saved to gallery', success: true);
         } else {

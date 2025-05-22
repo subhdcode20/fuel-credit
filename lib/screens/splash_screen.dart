@@ -5,6 +5,10 @@ import 'package:craditapp/constants.dart';
 import 'package:craditapp/services/shared_prefs_service.dart';
 import 'package:craditapp/screens/onboarding_screen.dart';
 import 'package:craditapp/login_screen.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:craditapp/MerchantHomeScreen.dart';
+import 'package:craditapp/DriverHomeScreen.dart';
 import 'dart:async';
 
 class SplashScreen extends StatefulWidget {
@@ -49,13 +53,60 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
   }
   
   void _navigateToNextScreen() async {
+    // Check if user is already logged in with Firebase
+    User? currentUser = FirebaseAuth.instance.currentUser;
+    
+    if (currentUser != null) {
+      // User is logged in, check user type in Firestore
+      try {
+        final String? phoneNumber = currentUser.phoneNumber;
+        
+        if (phoneNumber != null) {
+          // Fetch user data from Firestore
+          final docSnapshot = await FirebaseFirestore.instance
+              .collection('userDetails')
+              .doc(phoneNumber)
+              .get();
+          
+          if (docSnapshot.exists) {
+            final userData = docSnapshot.data();
+            final userType = userData?['userType'];
+            
+            if (mounted) {
+              if (userType == 'merchant') {
+                // Navigate to Merchant Home Screen
+                Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute(builder: (context) => MerchantHomeScreen(userData: userData!)),
+                );
+                return;
+              } else if (userType == 'client') {
+                // Navigate to Driver Home Screen
+                Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute(builder: (context) => DriverHomeScreen(userData: userData!)),
+                );
+                return;
+              }
+            }
+          }
+        }
+      } catch (e) {
+        print('Error checking user data: $e');
+      }
+    }
+    
+    // If we reach here, either user is not logged in or there was an error
+    // Fall back to the original navigation logic
     bool isFirstTime = await SharedPrefsService.isFirstTime();
     
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(
-        builder: (context) => isFirstTime ? OnboardingScreen() : LoginScreen(),
-      ),
-    );
+    if (mounted) {
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (context) => isFirstTime ? OnboardingScreen() : LoginScreen(),
+        ),
+      );
+    }
   }
   
   @override

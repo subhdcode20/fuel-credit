@@ -1,0 +1,274 @@
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/material.dart';
+import 'package:craditapp/constants.dart';
+import 'package:craditapp/screens/onboarding_screen.dart';
+import 'package:craditapp/MerchantHomeScreen.dart';
+import 'package:craditapp/DriverHomeScreen.dart';
+
+class SplashScreen extends StatefulWidget {
+  @override
+  _SplashScreenState createState() => _SplashScreenState();
+}
+
+class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<double> _opacityAnimation;
+  late Animation<double> _scaleAnimation;
+  
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: Duration(seconds: 3),
+    );
+    
+    _opacityAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(
+        parent: _controller,
+        curve: Interval(0.0, 0.5, curve: Curves.easeIn),
+      ),
+    );
+    
+    _scaleAnimation = Tween<double>(begin: 0.5, end: 1.0).animate(
+      CurvedAnimation(
+        parent: _controller,
+        curve: Interval(0.2, 0.7, curve: Curves.easeOutBack),
+      ),
+    );
+    
+    _controller.forward();
+    
+    // Check authentication status after a delay
+    _checkAuthAndNavigate();
+  }
+  
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+  
+  // Check if user is logged in and navigate accordingly
+  Future<void> _checkAuthAndNavigate() async {
+    // Give the splash screen time to animate
+    await Future.delayed(Duration(seconds: 2));
+    
+    // Check if user is logged in
+    final User? currentUser = FirebaseAuth.instance.currentUser;
+    
+    if (currentUser != null) {
+      // User is logged in, get their data from Firestore
+      try {
+        final String? phoneNumber = currentUser.phoneNumber;
+        
+        if (phoneNumber != null) {
+          // Fetch user data from Firestore
+          final docSnapshot = await FirebaseFirestore.instance
+              .collection('userDetails')
+              .doc(phoneNumber)
+              .get();
+          
+          if (docSnapshot.exists) {
+            final userData = docSnapshot.data();
+            final userType = userData?['userType'];
+            
+            if (mounted) {
+              if (userType == 'merchant') {
+                // Navigate to Merchant Home Screen
+                Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute(builder: (context) => MerchantHomeScreen(userData: userData!)),
+                );
+              } else if (userType == 'client') {
+                // Navigate to Driver Home Screen
+                Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute(builder: (context) => DriverHomeScreen(userData: userData!)),
+                );
+              } else {
+                // Unknown user type, go to onboarding
+                Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute(builder: (context) => OnboardingScreen()),
+                );
+              }
+            }
+          } else {
+            // User exists in Auth but not in Firestore
+            if (mounted) {
+              Navigator.pushReplacement(
+                context,
+                MaterialPageRoute(builder: (context) => OnboardingScreen()),
+              );
+            }
+          }
+        } else {
+          // No phone number, go to onboarding
+          if (mounted) {
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(builder: (context) => OnboardingScreen()),
+            );
+          }
+        }
+      } catch (e) {
+        print('Error checking user data: $e');
+        if (mounted) {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (context) => OnboardingScreen()),
+          );
+        }
+      }
+    } else {
+      // User is not logged in, go to onboarding
+      if (mounted) {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (context) => OnboardingScreen()),
+        );
+      }
+    }
+  }
+  
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AppColors.backgroundDark,
+      body: Stack(
+        children: [
+          // Background with animated waves
+          CustomPaint(
+            painter: SplashWavePainter(animation: _controller.value),
+            size: Size(MediaQuery.of(context).size.width, MediaQuery.of(context).size.height),
+          ),
+          
+          // App logo with animations
+          Center(
+            child: AnimatedBuilder(
+              animation: _controller,
+              builder: (context, child) {
+                return Transform.scale(
+                  scale: _scaleAnimation.value,
+                  child: Opacity(
+                    opacity: _opacityAnimation.value,
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        // App logo
+                        Container(
+                          width: 120,
+                          height: 120,
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            shape: BoxShape.circle,
+                            boxShadow: [
+                              BoxShadow(
+                                color: AppColors.primaryColor.withOpacity(0.3),
+                                blurRadius: 20,
+                                spreadRadius: 5,
+                              ),
+                            ],
+                          ),
+                          child: Center(
+                            child: Text(
+                              "LOGO",
+                              style: TextStyle(
+                                color: AppColors.primaryColor,
+                                fontSize: 24,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ),
+                        SizedBox(height: 24),
+                        // App name
+                        Text(
+                          "Credit App",
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 32,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 1.5,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+          
+          // Animated loading indicator
+          Positioned(
+            bottom: 50,
+            left: 0,
+            right: 0,
+            child: Center(
+              child: AnimatedBuilder(
+                animation: _controller,
+                builder: (context, child) {
+                  return Opacity(
+                    opacity: _opacityAnimation.value,
+                    child: SizedBox(
+                      width: 40,
+                      height: 40,
+                      child: Text("1.0 V", style: TextStyle(color: Colors.white)),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class SplashWavePainter extends CustomPainter {
+  final double animation;
+  
+  SplashWavePainter({required this.animation});
+  
+  @override
+  void paint(Canvas canvas, Size size) {
+    // Create multiple animated wave layers
+    _drawWave(canvas, size, 0.15, animation, 0.8);
+    _drawWave(canvas, size, 0.25, animation * 1.2, 0.6);
+    _drawWave(canvas, size, 0.35, animation * 0.8, 0.4);
+  }
+  
+  void _drawWave(Canvas canvas, Size size, double opacity, double animValue, double heightFactor) {
+    var paint = Paint()
+      ..color = AppColors.primaryColor.withOpacity(opacity)
+      ..style = PaintingStyle.fill;
+      
+    var path = Path();
+    
+    double waveHeight = size.height * heightFactor;
+    
+    path.moveTo(0, waveHeight);
+    
+    for (int i = 0; i < size.width.toInt(); i++) {
+      double x = i.toDouble();
+      double sinValue = sin((x / size.width * 4 * pi) + (animValue * pi * 2));
+      double y = waveHeight + sinValue * 20 * animValue;
+      path.lineTo(x, y);
+    }
+    
+    path.lineTo(size.width, size.height);
+    path.lineTo(0, size.height);
+    path.close();
+    
+    canvas.drawPath(path, paint);
+  }
+  
+  @override
+  bool shouldRepaint(CustomPainter oldDelegate) {
+    return true;
+  }
+}

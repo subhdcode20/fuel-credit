@@ -5,11 +5,13 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:uuid/uuid.dart';
 import 'package:intl/intl.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:geocoding/geocoding.dart';
 
 import 'constants.dart';
 import 'login_screen.dart';
 
-/// A home screen for drivers, displaying personal and credit data with payment functionality.
+/// A home screen for drivers, displaying personal, credit data, nearby stores, and payment functionality.
 class DriverHomeScreen extends StatefulWidget {
   final Map<String, dynamic> userData;
 
@@ -25,9 +27,12 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
   String _creditLimit = '0.00';
   String _creditBalance = '0.00';
   String _creditUsed = '0.00';
+  String _nextRepayAt = 'N/A';
   String _errorMessage = '';
   bool _isLoading = false;
   List<Map<String, dynamic>> _recentTransactions = [];
+  List<Map<String, dynamic>> _nearbyStores = [];
+  String? _userCity;
   late TabController _tabController;
 
   @override
@@ -36,6 +41,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
     _tabController = TabController(length: 2, vsync: this);
     _initializeData();
     _loadRecentTransactions();
+    _loadUserLocationAndStores();
   }
 
   @override
@@ -69,15 +75,23 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
           _creditLimit = (creditData['creditLimit'] as num?)?.toStringAsFixed(2) ?? '0.00';
           _creditBalance = (creditData['creditBal'] as num?)?.toStringAsFixed(2) ?? '0.00';
           _creditUsed = (creditData['creditUsed'] as num?)?.toStringAsFixed(2) ?? '0.00';
+          final nextRepayAt = creditData['nextRepayAt'] as int?;
+          _nextRepayAt = nextRepayAt != null
+              ? DateFormat('dd MMM yyyy').format(DateTime.fromMillisecondsSinceEpoch(nextRepayAt))
+              : 'N/A';
         } else {
           _creditLimit = (widget.userData['creditLimit'] as num?)?.toStringAsFixed(2) ?? '0.00';
           _creditBalance = (widget.userData['creditBal'] as num?)?.toStringAsFixed(2) ?? '0.00';
           _creditUsed = (widget.userData['creditUsed'] as num?)?.toStringAsFixed(2) ?? '0.00';
+          final nextRepayAt = widget.userData['nextRepayAt'] as int?;
+          _nextRepayAt = nextRepayAt != null
+              ? DateFormat('dd MMM yyyy').format(DateTime.fromMillisecondsSinceEpoch(nextRepayAt))
+              : 'N/A';
         }
 
         _errorMessage = '';
       });
-      debugPrint('Data initialized: Name = $_name, Phone = $_phoneNumber, Credit Limit = $_creditLimit, Credit Balance = $_creditBalance');
+      debugPrint('Data initialized: Name = $_name, Phone = $_phoneNumber, Credit Limit = $_creditLimit, Credit Balance = $_creditBalance, Next Repay At = $_nextRepayAt');
     } catch (e) {
       debugPrint('Error processing userData: $e');
       setState(() {
@@ -93,21 +107,18 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
         _isLoading = true;
       });
 
-      // Query without orderBy to avoid index requirement
       final querySnapshot = await FirebaseFirestore.instance
           .collection('trsData')
           .where('clientId', isEqualTo: _phoneNumber)
           .limit(10)
           .get();
 
-      // Collect unique merchant IDs
       final merchantIds = querySnapshot.docs
           .map((doc) => doc.data()['merchantId']?.toString())
           .where((id) => id != null)
           .toSet()
           .toList();
 
-      // Fetch merchant data in bulk
       Map<String, String> merchantNames = {};
       if (merchantIds.isNotEmpty) {
         final merchantQuerySnapshot = await FirebaseFirestore.instance
@@ -143,11 +154,10 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
         });
       }
 
-      // Sort transactions by createdAt in descending order
       transactions.sort((a, b) {
         final aCreatedAt = a['createdAt'] as int? ?? 0;
         final bCreatedAt = b['createdAt'] as int? ?? 0;
-        return bCreatedAt.compareTo(aCreatedAt); // Descending order
+        return bCreatedAt.compareTo(aCreatedAt);
       });
 
       setState(() {
@@ -166,6 +176,87 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(errorMessage)),
       );
+    }
+  }
+
+  /// Gets user location and loads stores in the same city
+  Future<void> _loadUserLocationAndStores() async {
+    try {
+      // Check and request location permission
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        setState(() {
+          _errorMessage = 'Location services are disabled.';
+        });
+        return;
+      }
+
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied) {
+          setState(() {
+            _errorMessage = 'Location permission denied.';
+          });
+          return;
+        }
+      }
+
+      if (permission == LocationPermission.deniedForever) {
+        setState(() {
+          _errorMessage = 'Location permission permanently denied.';
+        });
+        return;
+      }
+
+      // Get current position
+      Position position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+      );
+
+      // Reverse geocode to get city
+      List<Placemark> placemarks = await placemarkFromCoordinates(
+        position.latitude,
+        position.longitude,
+      );
+      String? city = placemarks.first.locality?.toLowerCase();
+      if (city == null || city.isEmpty) {
+        setState(() {
+          _errorMessage = 'Unable to determine city from location.';
+        });
+        return;
+      }
+
+      setState(() {
+        _userCity = city;
+      });
+
+      // Fetch stores in the same city
+      final querySnapshot = await FirebaseFirestore.instance
+          .collection('stores')
+          .where('city', isEqualTo: city)
+          .get();
+
+      final stores = <Map<String, dynamic>>[];
+      for (var doc in querySnapshot.docs) {
+        final data = doc.data();
+        stores.add({
+          'storeId': data['storeId']?.toString() ?? 'N/A',
+          'name': data['name']?.toString() ?? 'Unknown Store',
+          'address': data['address']?.toString() ?? 'N/A',
+          'phoneNo': data['phoneNo']?.toString() ?? 'N/A',
+        });
+      }
+
+      setState(() {
+        _nearbyStores = stores;
+      });
+      debugPrint('Loaded ${_nearbyStores.length} stores in city: $city');
+    } catch (e) {
+      debugPrint('Error loading location or stores: $e');
+      setState(() {
+        _errorMessage = 'Failed to load stores: $e';
+      });
     }
   }
 
@@ -354,6 +445,152 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
     return result;
   }
 
+  /// Shows a dialog to repay credit used
+  Future<double?> _showRepayDialog() async {
+    final amountController = TextEditingController(text: _creditUsed);
+    double? result;
+
+    await showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: AppColors.backgroundLight,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text(
+          'Repay Credit',
+          style: AppTextStyles.heading2.copyWith(color: Colors.white),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Credit Used: ₹$_creditUsed',
+              style: AppTextStyles.body.copyWith(color: Colors.white70),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Due Date: $_nextRepayAt',
+              style: AppTextStyles.body.copyWith(color: Colors.red[300]),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: amountController,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              style: const TextStyle(color: Colors.white),
+              decoration: InputDecoration(
+                labelText: 'Repayment Amount (₹)',
+                labelStyle: TextStyle(color: Colors.grey[400]),
+                prefixIcon: Icon(Icons.currency_rupee, color: AppColors.primaryColor),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  borderSide: BorderSide(color: AppColors.primaryColor),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  borderSide: BorderSide(color: AppColors.primaryColor),
+                ),
+                filled: true,
+                fillColor: AppColors.backgroundDark,
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(
+              'Cancel',
+              style: TextStyle(color: Colors.grey[400]),
+            ),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              final amountText = amountController.text.trim();
+              if (amountText.isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Please enter an amount')),
+                );
+                return;
+              }
+
+              try {
+                final amount = double.parse(amountText);
+                if (amount <= 0) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Amount must be greater than 0')),
+                  );
+                  return;
+                }
+                if (amount > double.parse(_creditUsed)) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Repayment cannot exceed credit used')),
+                  );
+                  return;
+                }
+                result = amount;
+                Navigator.pop(context);
+              } catch (e) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Please enter a valid amount')),
+                );
+              }
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primaryColor,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            child: const Text('Repay'),
+          ),
+        ],
+      ),
+    );
+
+    amountController.dispose();
+    return result;
+  }
+
+  /// Processes the repayment
+  Future<void> _processRepayment(double amount) async {
+    try {
+      final batch = FirebaseFirestore.instance.batch();
+      final driverRef = FirebaseFirestore.instance.collection('clientCreditData').doc(_phoneNumber);
+
+      // Update credit data
+      batch.update(driverRef, {
+        'creditBal': FieldValue.increment(amount),
+        'creditUsed': FieldValue.increment(-amount),
+        'nextRepayAt': DateTime.now().add(Duration(days: 30)).millisecondsSinceEpoch,
+      });
+
+      // Record repayment transaction
+      final transactionRef = FirebaseFirestore.instance.collection('trsData').doc();
+      batch.set(transactionRef, {
+        'trsId': const Uuid().v4(),
+        'merchantId': null,
+        'storeId': null,
+        'clientId': _phoneNumber,
+        'amount': amount,
+        'createdAt': DateTime.now().millisecondsSinceEpoch,
+        'status': 'repayment',
+        'isReported': false,
+      });
+
+      await batch.commit();
+      debugPrint('Repayment processed: amount=$amount');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Repayment of ₹${amount.toStringAsFixed(2)} successful'),
+          backgroundColor: Colors.green,
+        ),
+      );
+      await _refreshCreditData();
+      await _loadRecentTransactions();
+    } catch (e) {
+      debugPrint('Error processing repayment: $e');
+      _showErrorDialog('Repayment failed: $e');
+    }
+  }
+
   /// Processes the payment transaction
   Future<void> _processPayment({
     required double amount,
@@ -420,8 +657,12 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
           _creditLimit = (data['creditLimit'] as num?)?.toStringAsFixed(2) ?? '0.00';
           _creditBalance = (data['creditBal'] as num?)?.toStringAsFixed(2) ?? '0.00';
           _creditUsed = (data['creditUsed'] as num?)?.toStringAsFixed(2) ?? '0.00';
+          final nextRepayAt = data['nextRepayAt'] as int?;
+          _nextRepayAt = nextRepayAt != null
+              ? DateFormat('dd MMM yyyy').format(DateTime.fromMillisecondsSinceEpoch(nextRepayAt))
+              : 'N/A';
         });
-        debugPrint('Credit data refreshed: limit=$_creditLimit, balance=$_creditBalance, used=$_creditUsed');
+        debugPrint('Credit data refreshed: limit=$_creditLimit, balance=$_creditBalance, used=$_creditUsed, nextRepayAt=$_nextRepayAt');
       }
     } catch (e) {
       debugPrint('Error refreshing credit data: $e');
@@ -477,12 +718,19 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
             onPressed: () {
               _refreshCreditData();
               _loadRecentTransactions();
+              _loadUserLocationAndStores();
             },
           ),
           IconButton(
             icon: const Icon(Icons.logout, color: Colors.white),
             onPressed: () async {
+              setState(() {
+                _isLoading = true;
+              });
               await FirebaseAuth.instance.signOut();
+              setState(() {
+                _isLoading = false;
+              });
               Navigator.pushReplacement(
                 context,
                 MaterialPageRoute(builder: (context) => LoginScreen()),
@@ -649,7 +897,13 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
               style: AppTextStyles.body.copyWith(color: Colors.white),
             ),
             onTap: () async {
+              setState(() {
+                _isLoading = true;
+              });
               await FirebaseAuth.instance.signOut();
+              setState(() {
+                _isLoading = false;
+              });
               Navigator.pop(context);
               Navigator.pushReplacement(
                 context,
@@ -713,6 +967,41 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
             ),
             ..._recentTransactions.take(3).map((transaction) => _buildTransactionItem(transaction)),
           ],
+          const SizedBox(height: 24),
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8.0),
+            child: Text(
+              _userCity != null ? 'Stores in $_userCity' : 'Nearby Stores',
+              style: AppTextStyles.heading2.copyWith(fontSize: 18),
+            ),
+          ),
+          _nearbyStores.isEmpty
+              ? Center(
+            child: Column(
+              children: [
+                Icon(
+                  Icons.storefront,
+                  size: 64,
+                  color: Colors.grey[600],
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  'No stores found in your city',
+                  style: AppTextStyles.body.copyWith(color: Colors.grey[400]),
+                ),
+                TextButton(
+                  onPressed: _loadUserLocationAndStores,
+                  child: Text(
+                    'Retry',
+                    style: TextStyle(color: AppColors.primaryColor),
+                  ),
+                ),
+              ],
+            ),
+          )
+              : Column(
+            children: _nearbyStores.map((store) => _buildStoreItem(store)).toList(),
+          ),
         ],
       ),
     );
@@ -751,7 +1040,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
                 ),
               ),
               Icon(
-                Icons.account_balance_wallet,
+                Icons.payment,
                 color: Colors.white.withOpacity(0.8),
                 size: 24,
               ),
@@ -774,6 +1063,29 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
               _buildCreditInfoColumn('Credit Used', '₹$_creditUsed'),
             ],
           ),
+          const SizedBox(height: 16),
+          _buildCreditInfoColumn('Next Repayment', _nextRepayAt),
+          if (double.parse(_creditUsed) > 0) ...[
+            const SizedBox(height: 16),
+            Center(
+              child: ElevatedButton(
+                onPressed: () async {
+                  final amount = await _showRepayDialog();
+                  if (amount != null) {
+                    await _processRepayment(amount);
+                  }
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.white,
+                  foregroundColor: AppColors.primaryDark,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+                child: const Text('Pay Now'),
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -825,6 +1137,13 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
             'No transactions found',
             style: AppTextStyles.body.copyWith(color: Colors.grey[400]),
           ),
+          TextButton(
+            onPressed: _loadRecentTransactions,
+            child: Text(
+              'Refresh',
+              style: TextStyle(color: AppColors.primaryColor),
+            ),
+          ),
         ],
       ),
     )
@@ -856,6 +1175,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
       case 'failed':
         statusColor = Colors.red[300]!;
         break;
+      case 'repayment':
+        statusColor = Colors.blue[300]!;
+        break;
       default:
         statusColor = Colors.grey[400]!;
     }
@@ -875,12 +1197,12 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
         leading: CircleAvatar(
           backgroundColor: AppColors.primaryColor.withOpacity(0.2),
           child: Icon(
-            Icons.store,
+            status == 'repayment' ? Icons.payments : Icons.store,
             color: AppColors.primaryColor,
           ),
         ),
         title: Text(
-          merchantName,
+          status == 'repayment' ? 'Repayment' : merchantName,
           style: const TextStyle(
             color: Colors.white,
             fontWeight: FontWeight.bold,
@@ -898,7 +1220,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
             ),
             const SizedBox(height: 4),
             Text(
-              'Store: $storeId • Status: $status',
+              status == 'repayment' ? 'Status: $status' : 'Store: $storeId • Status: $status',
               style: TextStyle(
                 color: Colors.grey[400],
                 fontSize: 12,
@@ -907,12 +1229,66 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
           ],
         ),
         trailing: Text(
-          '₹${amount.toStringAsFixed(2)}',
+          status == 'repayment' ? '+₹${amount.toStringAsFixed(2)}' : '₹${amount.toStringAsFixed(2)}',
           style: TextStyle(
-            color: status == 'success' ? Colors.red[300] : Colors.grey[400],
+            color: status == 'success' ? Colors.red[300] : status == 'repayment' ? Colors.green[300] : Colors.grey[400],
             fontWeight: FontWeight.bold,
             fontSize: 16,
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStoreItem(Map<String, dynamic> store) {
+    final name = store['name'] as String;
+    final address = store['address'] as String;
+    final phoneNo = store['phoneNo'] as String;
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      color: AppColors.backgroundLight,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(
+          color: AppColors.primaryColor.withOpacity(0.2),
+          width: 1,
+        ),
+      ),
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        leading: CircleAvatar(
+          backgroundColor: AppColors.primaryColor.withOpacity(0.2),
+          child: Icon(
+            Icons.storefront,
+            color: AppColors.primaryColor,
+          ),
+        ),
+        title: Text(
+          name,
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              address,
+              style: TextStyle(
+                color: Colors.grey[400],
+                fontSize: 12,
+              ),
+            ),
+            Text(
+              'Phone: $phoneNo',
+              style: TextStyle(
+                color: Colors.grey[400],
+                fontSize: 12,
+              ),
+            ),
+          ],
         ),
       ),
     );

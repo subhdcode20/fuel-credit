@@ -1,250 +1,161 @@
-import 'package:craditapp/login_screen.dart';
-import 'package:flutter/material.dart';
-import 'package:qr_flutter/qr_flutter.dart';
-import 'package:share_plus/share_plus.dart';
-import 'package:path_provider/path_provider.dart';
-import 'dart:io';
-import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:fluttertoast/fluttertoast.dart';
+import 'dart:convert';
+import 'dart:math';
+import 'dart:typed_data';
+import 'dart:ui';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:qr_flutter/qr_flutter.dart';
+import 'package:share_plus/share_plus.dart';
+import 'dart:io';
+import 'package:intl/intl.dart';
 
+import 'MerchantTransactionsScreen.dart';
 import 'constants.dart';
+import 'login_screen.dart';
+import 'privacy_screen.dart';
+import 'profile_screen.dart';
+// Import the new transactions screen
 
+/// Main merchant dashboard with a navigation drawer for Home, Transactions, Privacy, Profile, and Logout.
 class MerchantHomeScreen extends StatefulWidget {
-  final Map<String, dynamic>? userData;
-  
-  const MerchantHomeScreen({Key? key, this.userData}) : super(key: key);
+  final Map<String, dynamic> userData;
+
+  const MerchantHomeScreen({super.key, required this.userData});
 
   @override
-  _MerchantHomeScreenState createState() => _MerchantHomeScreenState();
+  State<MerchantHomeScreen> createState() => _MerchantHomeScreenState();
 }
 
-class _MerchantHomeScreenState extends State<MerchantHomeScreen> with SingleTickerProviderStateMixin {
-  late TabController _tabController;
-  List<Map<String, dynamic>> storesList = [];
-  Map<String, dynamic> merchantData = {};
-  Map<String, dynamic> userData = {};
-  bool isLoading = true;
-  
+class _MerchantHomeScreenState extends State<MerchantHomeScreen>
+    with SingleTickerProviderStateMixin {
+  String _name = 'Unknown';
+  String _phoneNumber = 'N/A';
+  String _errorMessage = '';
+  int _selectedIndex = 0;
+  late AnimationController _animationController;
+  late Animation<double> _fadeAnimation;
+
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
-    _loadUserData();
+    _animationController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 800),
+    );
+    _fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(parent: _animationController, curve: Curves.easeInOut),
+    );
+    _animationController.forward();
+    _initializeData();
   }
-  
-  Future<void> _loadUserData() async {
-    try {
-      // Check if userData was passed to the widget
-      if (widget.userData != null && widget.userData!.isNotEmpty) {
-        userData = widget.userData!;
-        
-        // Use the phone number from userData to fetch merchant data
-        String phoneNumber = userData['phoneNo'] ?? "";
-        
-        final merchantDoc = await FirebaseFirestore.instance
-            .collection('merchantData')
-            .doc(phoneNumber)
-            .get();
-            
-        if (!merchantDoc.exists) {
-          // Try with userId if phone number doesn't work
-          final merchantQuery = await FirebaseFirestore.instance
-              .collection('merchantData')
-              .where('uId', isEqualTo: userData['userId'])
-              .limit(1)
-              .get();
-              
-          if (merchantQuery.docs.isEmpty) {
-            setState(() {
-              isLoading = false;
-            });
-            Fluttertoast.showToast(msg: "Merchant data not found");
-            return;
-          }
-          
-          merchantData = merchantQuery.docs.first.data();
-        } else {
-          merchantData = merchantDoc.data() ?? {};
-        }
-        
-        // Load store data after merchant data is loaded
-        await _loadStoreData();
-        return;
-      }
-      
-      // If no userData was passed, continue with existing code to fetch from Firebase
-      // Get current user
-      final user = FirebaseAuth.instance.currentUser;
-      if (user == null) {
-        setState(() {
-          isLoading = false;
-        });
-        Fluttertoast.showToast(msg: "User not logged in");
-        return;
-      }
-      
-      String userId = user.uid;
-      String phoneNumber = user.phoneNumber ?? "";
-      
-      // Fetch user data from userDetails collection
-      final userDoc = await FirebaseFirestore.instance
-          .collection('userDetails')
-          .doc(userId)
-          .get();
-          
-      if (!userDoc.exists) {
-        // Try to fetch by phone number if userId doesn't work
-        final userQuery = await FirebaseFirestore.instance
-            .collection('userDetails')
-            .where('phoneNo', isEqualTo: phoneNumber)
-            .limit(1)
-            .get();
-            
-        if (userQuery.docs.isEmpty) {
-          setState(() {
-            isLoading = false;
-          });
-          Fluttertoast.showToast(msg: "User data not found");
-          return;
-        }
-        
-        userData = userQuery.docs.first.data();
-      } else {
-        userData = userDoc.data() ?? {};
-      }
-      
-      // Now fetch merchant data using phone number
-      phoneNumber = userData['phoneNo'] ?? phoneNumber;
-      
-      final merchantDoc = await FirebaseFirestore.instance
-          .collection('merchantData')
-          .doc(phoneNumber)
-          .get();
-          
-      if (!merchantDoc.exists) {
-        // Try with userId if phone number doesn't work
-        final merchantQuery = await FirebaseFirestore.instance
-            .collection('merchantData')
-            .where('uId', isEqualTo: userId)
-            .limit(1)
-            .get();
-            
-        if (merchantQuery.docs.isEmpty) {
-          setState(() {
-            isLoading = false;
-          });
-          Fluttertoast.showToast(msg: "Merchant data not found");
-          return;
-        }
-        
-        merchantData = merchantQuery.docs.first.data();
-      } else {
-        merchantData = merchantDoc.data() ?? {};
-      }
-      
-      // Load store data after merchant data is loaded
-      await _loadStoreData();
-      
-    } catch (e) {
-      print('Error loading user data: $e');
+
+  void _initializeData() {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      debugPrint('No authenticated user found. Redirecting to login...');
       setState(() {
-        isLoading = false;
+        _errorMessage = 'Please log in to view your data.';
       });
-      Fluttertoast.showToast(msg: "Failed to load user data: $e");
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (context) => LoginScreen()),
+      );
+      return;
     }
-  }
-  
-  Future<void> _loadStoreData() async {
+
     try {
-      final List<dynamic> storeIds = merchantData['stores'] ?? [];
-      
-      if (storeIds.isEmpty) {
-        setState(() {
-          isLoading = false;
-        });
-        return;
-      }
-      
-      List<Map<String, dynamic>> stores = [];
-      
-      // For each store ID, create a store object with QR data
-      for (String storeId in storeIds) {
-        Map<String, dynamic> storeData = {
-          'storeId': storeId,
-          'serviceName': 'Store ${stores.length + 1}',
-          'serviceType': merchantData['serviceType'] ?? 'fuel',
-          'isActive': merchantData['isActive'] ?? true,
-        };
-        
-        stores.add(storeData);
-      }
-      
       setState(() {
-        storesList = stores;
-        isLoading = false;
-      });
-    } catch (e) {
-      print('Error loading store data: $e');
-      setState(() {
-        isLoading = false;
-      });
-    }
-  }
-  
-  @override
-  void dispose() {
-    _tabController.dispose();
-    super.dispose();
-  }
-  
-  Future<void> _shareQRCode(Map<String, dynamic> store) async {
-    try {
-      final qrData = {
-        'merchantId': merchantData['merchantId'] ?? merchantData['phoneNo'],
-        'storeId': store['storeId'],
-      };
-      
-      final qrImage = await QrPainter(
-        data: qrData.toString(),
-        version: QrVersions.auto,
-        gapless: true,
-        color: Colors.black,
-        emptyColor: Colors.white,
-      ).toImageData(300);
-      
-      if (qrImage == null) {
-        Fluttertoast.showToast(msg: "Failed to generate QR code");
-        return;
-      }
-      
-      final bytes = qrImage.buffer.asUint8List();
-      
-      if (kIsWeb) {
-        Fluttertoast.showToast(msg: "Sharing not supported on web");
-      } else {
-        final directory = await getApplicationDocumentsDirectory();
-        final file = File('${directory.path}/${store['storeId']}_qrcode.png');
-        await file.writeAsBytes(bytes);
-        
-        await Share.shareXFiles(
-          [XFile(file.path)],
-          text: 'QR Code for ${store['serviceName']} (Store ID: ${store['storeId']})',
+        _name = widget.userData['name']?.toString() ?? 'Unknown';
+        _phoneNumber = _sanitizePhoneNumber(
+          widget.userData['phoneNo']?.toString() ?? 'N/A',
         );
-      }
+        _errorMessage = '';
+      });
+      debugPrint('Merchant data: Name = $_name, Phone = $_phoneNumber');
     } catch (e) {
-      Fluttertoast.showToast(msg: "Failed to share QR code: $e");
+      debugPrint('Error processing userData: $e');
+      setState(() {
+        _errorMessage = 'Failed to load data: $e';
+      });
+    }
+  }
+
+  String _sanitizePhoneNumber(String phoneNumber) {
+    final sanitized = phoneNumber.replaceAll(RegExp(r'[^0-9+]'), '');
+    debugPrint('Sanitized phone number: $sanitized');
+    return sanitized.isEmpty ? 'N/A' : sanitized;
+  }
+
+  void _onNavItemTapped(int index) {
+    setState(() {
+      _selectedIndex = index;
+    });
+    Navigator.pop(context);
+  }
+
+  void _logout() async {
+    try {
+      await FirebaseAuth.instance.signOut();
+      debugPrint('User logged out successfully');
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (context) => LoginScreen()),
+      );
+    } catch (e) {
+      debugPrint('Error logging out: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to log out: $e'),
+          backgroundColor: Colors.red.shade800,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+          ),
+        ),
+      );
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final List<Widget> screens = [
+      HomeScreen(name: _name, phoneNumber: _phoneNumber),
+      MerchantTransactionsScreen(phoneNumber: _phoneNumber),
+      const PrivacyScreen(),
+      ProfileScreen(name: _name, phoneNumber: _phoneNumber),
+    ];
+
     return Scaffold(
       backgroundColor: AppColors.backgroundColor,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        title: Text(
+          _selectedIndex == 0
+              ? 'Merchant Dashboard'
+              : _selectedIndex == 1
+              ? 'Transactions'
+              : _selectedIndex == 2
+              ? 'Privacy Policy'
+              : 'Profile',
+          style: AppTextStyles.heading2.copyWith(color: Colors.white),
+        ),
+      ),
+      drawer: _buildDrawer(),
       body: Stack(
         children: [
-          // Background elements
+          Container(
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [AppColors.backgroundDark, AppColors.backgroundLight],
+              ),
+            ),
+          ),
           Positioned(
             top: -100,
             right: -100,
@@ -253,191 +164,995 @@ class _MerchantHomeScreenState extends State<MerchantHomeScreen> with SingleTick
               height: 200,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: AppColors.primaryColor.withOpacity(0.2),
+                color: AppColors.primaryColor.withOpacity(0.1),
               ),
             ),
           ),
-          Positioned(
-            bottom: -150,
-            left: -50,
-            child: Container(
-              width: 300,
-              height: 300,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: AppColors.primaryDark.withOpacity(0.15),
+          SafeArea(
+            child:
+                _errorMessage.isNotEmpty
+                    ? Center(
+                      child: Text(
+                        _errorMessage,
+                        style: AppTextStyles.body.copyWith(
+                          color: Colors.red.shade300,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    )
+                    : FadeTransition(
+                      opacity: _fadeAnimation,
+                      child: screens[_selectedIndex],
+                    ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDrawer() {
+    return Drawer(
+      backgroundColor: AppColors.backgroundLight,
+      child: Column(
+        children: [
+          Container(
+            height: 200,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [AppColors.primaryColor, AppColors.primaryDark],
               ),
             ),
-          ),
-          // Wave decoration at the top
-          Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            child: ClipPath(
-              clipper: WaveClipper(),
-              child: Container(
-                height: 160,
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [AppColors.primaryColor, AppColors.primaryDark],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
+            child: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  CircleAvatar(
+                    radius: 40,
+                    backgroundColor: AppColors.accentColor,
+                    child: Text(
+                      _name.isNotEmpty ? _name[0].toUpperCase() : 'M',
+                      style: AppTextStyles.heading1.copyWith(
+                        color: Colors.white,
+                      ),
+                    ),
                   ),
+                  const SizedBox(height: 8),
+                  Text(
+                    _name,
+                    style: AppTextStyles.heading2.copyWith(color: Colors.white),
+                  ),
+                  Text(
+                    _phoneNumber,
+                    style: AppTextStyles.body.copyWith(color: Colors.grey[300]),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          ListTile(
+            leading: Icon(
+              Icons.home,
+              color:
+                  _selectedIndex == 0
+                      ? AppColors.accentColor
+                      : Colors.grey[400],
+            ),
+            title: Text(
+              'Home',
+              style: AppTextStyles.body.copyWith(
+                color:
+                    _selectedIndex == 0 ? AppColors.accentColor : Colors.white,
+              ),
+            ),
+            selected: _selectedIndex == 0,
+            onTap: () => _onNavItemTapped(0),
+          ),
+          ListTile(
+            leading: Icon(
+              Icons.receipt_long,
+              color:
+                  _selectedIndex == 1
+                      ? AppColors.accentColor
+                      : Colors.grey[400],
+            ),
+            title: Text(
+              'Show Transactions',
+              style: AppTextStyles.body.copyWith(
+                color:
+                    _selectedIndex == 1 ? AppColors.accentColor : Colors.white,
+              ),
+            ),
+            selected: _selectedIndex == 1,
+            onTap: () => _onNavItemTapped(1),
+          ),
+          ListTile(
+            leading: Icon(
+              Icons.privacy_tip,
+              color:
+                  _selectedIndex == 2
+                      ? AppColors.accentColor
+                      : Colors.grey[400],
+            ),
+            title: Text(
+              'Privacy Policy',
+              style: AppTextStyles.body.copyWith(
+                color:
+                    _selectedIndex == 2 ? AppColors.accentColor : Colors.white,
+              ),
+            ),
+            selected: _selectedIndex == 2,
+            onTap: () => _onNavItemTapped(2),
+          ),
+          ListTile(
+            leading: Icon(
+              Icons.person,
+              color:
+                  _selectedIndex == 3
+                      ? AppColors.accentColor
+                      : Colors.grey[400],
+            ),
+            title: Text(
+              'Profile',
+              style: AppTextStyles.body.copyWith(
+                color:
+                    _selectedIndex == 3 ? AppColors.accentColor : Colors.white,
+              ),
+            ),
+            selected: _selectedIndex == 3,
+            onTap: () => _onNavItemTapped(3),
+          ),
+          const Spacer(),
+          ListTile(
+            leading: const Icon(Icons.logout, color: Colors.red),
+            title: Text(
+              'Logout',
+              style: AppTextStyles.body.copyWith(color: Colors.red),
+            ),
+            onTap: _logout,
+          ),
+          const SizedBox(height: 16),
+        ],
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    _animationController.dispose();
+    super.dispose();
+  }
+}
+
+/// Home screen displaying a list of stores with QR codes and an option to add new stores.
+class HomeScreen extends StatefulWidget {
+  final String name;
+  final String phoneNumber;
+
+  const HomeScreen({super.key, required this.name, required this.phoneNumber});
+
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  final _addStoreFormKey = GlobalKey<FormState>();
+  final _serviceNameController = TextEditingController();
+  String? _selectedServiceType;
+  bool _isAddingStore = false;
+  bool _subcollectionAccessDenied = false;
+  final Map<String, GlobalKey> _qrKeys = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _checkAuth();
+  }
+
+  @override
+  void dispose() {
+    _serviceNameController.dispose();
+    super.dispose();
+  }
+
+  void _checkAuth() {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      debugPrint('User not authenticated');
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('Please log in to continue'),
+            backgroundColor: Colors.red.shade800,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
+          ),
+        );
+        Navigator.pushReplacementNamed(context, '/login');
+      });
+    } else {
+      debugPrint(
+        'User authenticated: uid=${user.uid}, phoneNumber=${widget.phoneNumber}, email=${user.email}',
+      );
+    }
+  }
+
+  String _formatTimestamp(Timestamp? timestamp) {
+    if (timestamp == null) return 'N/A';
+    final dateTime = timestamp.toDate();
+    return DateFormat('dd MMM yyyy, HH:mm:ss').format(dateTime);
+  }
+
+  String _generateStoreId() {
+    final random = Random();
+    final digits = List.generate(6, (_) => random.nextInt(10)).join();
+    return 'STORE$digits';
+  }
+
+  String _capitalize(String? s) =>
+      s != null && s.isNotEmpty ? '${s[0].toUpperCase()}${s.substring(1)}' : '';
+
+  void _showAddStoreDialog() {
+    _serviceNameController.clear();
+    _selectedServiceType = null;
+
+    showDialog(
+      context: context,
+      builder:
+          (context) => AlertDialog(
+            backgroundColor: AppColors.backgroundLight,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+            ),
+            title: Text(
+              'Add New Store',
+              style: AppTextStyles.heading2.copyWith(color: Colors.white),
+            ),
+            content: Form(
+              key: _addStoreFormKey,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _buildTextField(
+                      controller: _serviceNameController,
+                      label: 'Service Name (Optional)',
+                      validator: null,
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      'Service Type',
+                      style: AppTextStyles.body.copyWith(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Container(
+                      decoration: BoxDecoration(
+                        color: AppColors.backgroundDark,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: AppColors.primaryColor.withOpacity(0.5),
+                        ),
+                      ),
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: DropdownButtonFormField<String>(
+                        value: _selectedServiceType,
+                        hint: Text(
+                          'Select Service Type',
+                          style: AppTextStyles.body.copyWith(
+                            color: Colors.grey[600],
+                          ),
+                        ),
+                        items:
+                            ['fuel', 'lubricant', 'tyre'].map((type) {
+                              return DropdownMenuItem(
+                                value: type,
+                                child: Text(
+                                  _capitalize(type),
+                                  style: AppTextStyles.body.copyWith(
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              );
+                            }).toList(),
+                        onChanged: (value) {
+                          setState(() {
+                            _selectedServiceType = value;
+                          });
+                        },
+                        validator:
+                            (value) =>
+                                value == null
+                                    ? 'Service Type is required'
+                                    : null,
+                        decoration: const InputDecoration(
+                          border: InputBorder.none,
+                        ),
+                        dropdownColor: AppColors.backgroundLight,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: Text(
+                  'Cancel',
+                  style: AppTextStyles.body.copyWith(color: Colors.grey[400]),
+                ),
+              ),
+              ElevatedButton(
+                onPressed: _isAddingStore ? null : _addNewStore,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primaryColor,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+                child: Text(
+                  _isAddingStore ? 'Adding...' : 'Add Store',
+                  style: AppTextStyles.body.copyWith(color: Colors.white),
+                ),
+              ),
+            ],
+          ),
+    );
+  }
+
+  void _addNewStore() async {
+    if (!_addStoreFormKey.currentState!.validate()) return;
+
+    setState(() => _isAddingStore = true);
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) throw Exception('User not authenticated');
+
+      final storeId = _generateStoreId();
+      final now = Timestamp.now();
+
+      debugPrint(
+        'Adding store: storeId=$storeId, phoneNumber=${widget.phoneNumber}, uid=${user.uid}',
+      );
+
+      final merchantDoc =
+          await FirebaseFirestore.instance
+              .collection('merchantData')
+              .doc(widget.phoneNumber)
+              .get();
+      if (!merchantDoc.exists) {
+        throw Exception(
+          'Merchant data not found. Please complete registration.',
+        );
+      }
+      final merchantData = merchantDoc.data()!;
+
+      final userDoc =
+          await FirebaseFirestore.instance
+              .collection('userDetails')
+              .doc(widget.phoneNumber)
+              .get();
+      if (!userDoc.exists) {
+        throw Exception(
+          'User details not found. Please complete registration.',
+        );
+      }
+      final userData = userDoc.data()!;
+
+      final storeData = {
+        'createdAt': now,
+        'isActive': true,
+        'merchantId': widget.phoneNumber,
+        'phoneNo': widget.phoneNumber,
+        'serviceName':
+            _serviceNameController.text.isEmpty
+                ? 'Unnamed Store'
+                : _serviceNameController.text.trim(),
+        'serviceType': _selectedServiceType,
+        'storeId': storeId,
+        'uId': userData['userId']?.toString() ?? user.uid,
+        'address': merchantData['address']?.toString() ?? 'N/A',
+        'businessName': merchantData['businessName']?.toString() ?? 'N/A',
+        'ownerName': merchantData['ownerName']?.toString() ?? 'N/A',
+        'kycDocs': {'businessReg': '', 'companyPan': '', 'gst': ''},
+        'nextSettlementAt': now,
+      };
+
+      final merchantRef = FirebaseFirestore.instance
+          .collection('merchantData')
+          .doc(widget.phoneNumber);
+      await merchantRef.update({
+        'stores': FieldValue.arrayUnion([storeId]),
+      });
+
+      final storeRef = merchantRef.collection('stores').doc(storeId);
+      await storeRef.set(storeData);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('Store added successfully'),
+            backgroundColor: AppColors.accentColor,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
+          ),
+        );
+        Navigator.pop(context);
+      }
+    } catch (e) {
+      debugPrint('Error adding store: $e');
+      String errorMessage = 'Failed to add store: $e';
+      if (e.toString().contains('PERMISSION_DENIED')) {
+        errorMessage =
+            'Permission denied. Please ensure you are logged in with the correct account.';
+      } else if (e.toString().contains('Merchant data not found') ||
+          e.toString().contains('User details not found')) {
+        errorMessage =
+            'Registration incomplete. Please complete merchant registration first.';
+      } else if (e.toString().contains('network')) {
+        errorMessage =
+            'Network error. Please check your connection and try again.';
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(errorMessage),
+            backgroundColor: Colors.red.shade800,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isAddingStore = false);
+    }
+  }
+
+  Future<Uint8List?> _captureQrCode(String storeId) async {
+    try {
+      final qrKey = _qrKeys[storeId];
+      if (qrKey == null || qrKey.currentContext == null) {
+        debugPrint('QR key not found for storeId: $storeId');
+        return null;
+      }
+
+      final RenderRepaintBoundary boundary =
+          qrKey.currentContext!.findRenderObject() as RenderRepaintBoundary;
+      final image = await boundary.toImage(pixelRatio: 3.0);
+      final byteData = await image.toByteData(format: ImageByteFormat.png);
+      return byteData?.buffer.asUint8List();
+    } catch (e) {
+      debugPrint('Error capturing QR code: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to capture QR code: $e'),
+          backgroundColor: Colors.red.shade800,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+          ),
+        ),
+      );
+      return null;
+    }
+  }
+
+  Future<void> _shareQrCode(String storeId, String businessName) async {
+    try {
+      final imageBytes = await _captureQrCode(storeId);
+      if (imageBytes == null) return;
+
+      final tempDir = await getTemporaryDirectory();
+      final file = await File(
+        '${tempDir.path}/QR_$storeId.png',
+      ).writeAsBytes(imageBytes);
+
+      await Share.shareXFiles([
+        XFile(file.path),
+      ], text: 'Scan this QR code for $businessName (Store ID: $storeId)');
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('QR code for $businessName shared successfully'),
+          backgroundColor: AppColors.accentColor,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+          ),
+        ),
+      );
+    } catch (e) {
+      debugPrint('Error sharing QR code: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to share QR code: $e'),
+          backgroundColor: Colors.red.shade800,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+          ),
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      return const Center(
+        child: Text(
+          'Please log in to view stores.',
+          style: AppTextStyles.body,
+          textAlign: TextAlign.center,
+        ),
+      );
+    }
+
+    return StreamBuilder<DocumentSnapshot>(
+      stream:
+          FirebaseFirestore.instance
+              .collection('merchantData')
+              .doc(widget.phoneNumber)
+              .snapshots(),
+      builder: (context, merchantSnapshot) {
+        if (merchantSnapshot.connectionState == ConnectionState.waiting) {
+          return const Center(
+            child: CircularProgressIndicator(
+              valueColor: AlwaysStoppedAnimation<Color>(AppColors.accentColor),
+            ),
+          );
+        }
+        if (merchantSnapshot.hasError) {
+          debugPrint(
+            'Error fetching merchantData/${widget.phoneNumber}: ${merchantSnapshot.error}',
+          );
+          String errorMessage =
+              'Error loading stores: ${merchantSnapshot.error}';
+          if (merchantSnapshot.error.toString().contains('PERMISSION_DENIED')) {
+            errorMessage =
+                'Permission denied. Please log in with the correct account.';
+          }
+          return Center(
+            child: Text(
+              errorMessage,
+              style: AppTextStyles.body.copyWith(color: Colors.red.shade300),
+              textAlign: TextAlign.center,
+            ),
+          );
+        }
+        if (!merchantSnapshot.hasData || !merchantSnapshot.data!.exists) {
+          debugPrint('No merchantData/${widget.phoneNumber} found');
+          return const Center(
+            child: Text(
+              'No stores found. Complete merchant registration to add stores.',
+              style: AppTextStyles.body,
+              textAlign: TextAlign.center,
+            ),
+          );
+        }
+
+        final merchantData =
+            merchantSnapshot.data!.data() as Map<String, dynamic>;
+        final storeIds =
+            (merchantData['stores'] as List<dynamic>?)?.cast<String>() ?? [];
+
+        return StreamBuilder<DocumentSnapshot>(
+          stream:
+              FirebaseFirestore.instance
+                  .collection('userDetails')
+                  .doc(widget.phoneNumber)
+                  .snapshots(),
+          builder: (context, userSnapshot) {
+            if (userSnapshot.connectionState == ConnectionState.waiting) {
+              return const Center(
+                child: CircularProgressIndicator(
+                  valueColor: AlwaysStoppedAnimation<Color>(
+                    AppColors.accentColor,
+                  ),
+                ),
+              );
+            }
+            if (userSnapshot.hasError) {
+              debugPrint(
+                'Error fetching userDetails/${widget.phoneNumber}: ${userSnapshot.error}',
+              );
+              String errorMessage =
+                  'Error loading user data: ${userSnapshot.error}';
+              if (userSnapshot.error.toString().contains('PERMISSION_DENIED')) {
+                errorMessage =
+                    'Permission denied. Please log in with the correct account.';
+              }
+              return Center(
+                child: Text(
+                  errorMessage,
+                  style: AppTextStyles.body.copyWith(
+                    color: Colors.red.shade300,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              );
+            }
+            if (!userSnapshot.hasData || !userSnapshot.data!.exists) {
+              debugPrint('No userDetails/${widget.phoneNumber} found');
+              return const Center(
+                child: Text(
+                  'User data not found. Please complete registration.',
+                  style: AppTextStyles.body,
+                  textAlign: TextAlign.center,
+                ),
+              );
+            }
+
+            final userData = userSnapshot.data!.data() as Map<String, dynamic>;
+            final userId = userData['userId']?.toString() ?? user.uid;
+
+            return SingleChildScrollView(
+              child: Stack(
+                children: [
+                  Positioned(
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    child: Container(
+                      height: 200,
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [
+                            AppColors.primaryColor.withOpacity(0.3),
+                            AppColors.backgroundLight.withOpacity(0.1),
+                          ],
+                        ),
+                        borderRadius: const BorderRadius.vertical(
+                          bottom: Radius.circular(50),
+                        ),
+                      ),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.all(24.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const SizedBox(height: 50),
+                        Column(
+                          mainAxisAlignment: MainAxisAlignment.start,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'welcome,',
+                              style: AppTextStyles.heading1.copyWith(
+                                color: AppColors.accentColor,
+                                fontSize: 20,
+                                shadows: [
+                                  Shadow(
+                                    color: AppColors.primaryColor.withOpacity(
+                                      0.5,
+                                    ),
+                                    blurRadius: 8,
+                                  ),
+                                ],
+                              ),
+                            ),
+                            SizedBox(height: 8,),
+                            Text(
+                              '${widget.name}!',
+                              style: AppTextStyles.heading1.copyWith(
+                                color: AppColors.accentColor,
+                                fontSize: 20,
+                                shadows: [
+                                  Shadow(
+                                    color: AppColors.primaryColor.withOpacity(
+                                      0.5,
+                                    ),
+                                    blurRadius: 8,
+                                  ),
+                                ],
+                              ),
+                            ),
+                            ElevatedButton.icon(
+                              onPressed: _showAddStoreDialog,
+                              icon: const Icon(Icons.add, size: 18),
+                              label: const Text('Add Store'),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: AppColors.accentColor,
+                                foregroundColor: Colors.white,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 16,
+                                  vertical: 8,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Your Store Dashboard',
+                          style: AppTextStyles.body.copyWith(
+                            color: Colors.grey[400],
+                          ),
+                        ),
+                        const SizedBox(height: 24),
+                        storeIds.isEmpty
+                            ? Center(
+                              child: Text(
+                                'No stores available. Add a store to get started.',
+                                style: AppTextStyles.body.copyWith(
+                                  color: Colors.grey[400],
+                                ),
+                                textAlign: TextAlign.center,
+                              ),
+                            )
+                            : ListView.builder(
+                              shrinkWrap: true,
+                              physics: const NeverScrollableScrollPhysics(),
+                              itemCount: storeIds.length,
+                              itemBuilder: (context, index) {
+                                final storeId = storeIds[index];
+
+                                if (!_qrKeys.containsKey(storeId)) {
+                                  _qrKeys[storeId] = GlobalKey();
+                                }
+
+                                if (_subcollectionAccessDenied) {
+                                  final businessName =
+                                      merchantData['businessName'] ??
+                                      'Store $storeId';
+                                  final serviceType =
+                                      merchantData['serviceType'] ?? 'N/A';
+                                  final qrData = jsonEncode({
+                                    'storeId': storeId,
+                                    'userId': userId,
+                                    'phoneNo': widget.phoneNumber,
+                                  });
+
+                                  return _buildStoreCard(
+                                    storeId: storeId,
+                                    businessName: businessName,
+                                    serviceType: serviceType,
+                                    qrData: qrData,
+                                  );
+                                }
+
+                                return StreamBuilder<DocumentSnapshot>(
+                                  stream:
+                                      FirebaseFirestore.instance
+                                          .collection('merchantData')
+                                          .doc(widget.phoneNumber)
+                                          .collection('stores')
+                                          .doc(storeId)
+                                          .snapshots(),
+                                  builder: (context, storeSnapshot) {
+                                    String businessName =
+                                        merchantData['businessName'] ??
+                                        'Store $storeId';
+                                    String serviceType =
+                                        merchantData['serviceType'] ?? 'N/A';
+                                    Timestamp? createdAt;
+
+                                    if (storeSnapshot.hasData &&
+                                        storeSnapshot.data!.exists) {
+                                      final storeData =
+                                          storeSnapshot.data!.data()
+                                              as Map<String, dynamic>;
+                                      businessName =
+                                          storeData['serviceName'] ??
+                                          storeData['businessName'] ??
+                                          businessName;
+                                      serviceType =
+                                          storeData['serviceType'] ??
+                                          serviceType;
+                                      createdAt = storeData['createdAt'];
+                                    } else if (storeSnapshot.hasError) {
+                                      debugPrint(
+                                        'Error fetching store $storeId: ${storeSnapshot.error}',
+                                      );
+                                      if (storeSnapshot.error
+                                          .toString()
+                                          .contains('PERMISSION_DENIED')) {
+                                        setState(
+                                          () =>
+                                              _subcollectionAccessDenied = true,
+                                        );
+                                      }
+                                    }
+
+                                    final qrData = jsonEncode({
+                                      'storeId': storeId,
+                                      'userId': userId,
+                                      'phoneNo': widget.phoneNumber,
+                                    });
+
+                                    return _buildStoreCard(
+                                      storeId: storeId,
+                                      businessName: businessName,
+                                      serviceType: serviceType,
+                                      createdAt: createdAt,
+                                      qrData: qrData,
+                                    );
+                                  },
+                                );
+                              },
+                            ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildStoreCard({
+    required String storeId,
+    required String businessName,
+    required String serviceType,
+    Timestamp? createdAt,
+    required String qrData,
+  }) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            AppColors.primaryColor.withOpacity(0.2),
+            AppColors.primaryDark.withOpacity(0.2),
+          ],
+        ),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.primaryColor.withOpacity(0.5)),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.primaryColor.withOpacity(0.3),
+            blurRadius: 10,
+            spreadRadius: 2,
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.store, color: AppColors.accentColor, size: 28),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  businessName,
+                  style: AppTextStyles.heading2.copyWith(color: Colors.white),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Center(
+            child: RepaintBoundary(
+              key: _qrKeys[storeId],
+              child: QrImageView(
+                data: qrData,
+                version: QrVersions.auto,
+                size: 150.0,
+                backgroundColor: Colors.white,
+                padding: const EdgeInsets.all(8),
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Center(
+            child: ElevatedButton.icon(
+              onPressed: () => _shareQrCode(storeId, businessName),
+              icon: const Icon(Icons.share, size: 18),
+              label: const Text('Share'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.accentColor,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
                 ),
               ),
             ),
           ),
-          // Main content
-          SingleChildScrollView(
-            scrollDirection: Axis.vertical,
-            child: SafeArea(
-              child: isLoading
-                  ? Center(child: CircularProgressIndicator(color: AppColors.accentColor))
-                  : Column(
-                      children: [
-                        Padding(
-                          padding: const EdgeInsets.all(16.0),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Text(
-                                "Merchant Dashboard",
-                                style: AppTextStyles.heading1,
-                              ),
-                              IconButton(
-                                icon: Icon(Icons.logout, color: Colors.white),
-                                onPressed: () {
-                                  Navigator.pushReplacement(context, MaterialPageRoute(builder: (context) => LoginScreen(),));
-                                },
-                              ),
-                            ],
-                          ),
-                        ),
-                        SizedBox(height: 24),
-                        _buildInfoCard(
-                          title: 'Business Information',
-                          children: [
-                            _buildInfoRow('Business Name', merchantData['businessName'] ?? 'Not Available'),
-                            _buildInfoRow('Owner Name', merchantData['ownerName'] ?? userData['name'] ?? 'Not Available'),
-                            _buildInfoRow('Address', merchantData['address'] ?? 'Not Available'),
-                            _buildInfoRow('Service Type', merchantData['serviceType'] ?? 'Not Available'),
-                          ],
-                        ),
-                        SizedBox(height: 16),
-                        _buildInfoCard(
-                          title: 'KYC Documents',
-                          children: [
-                            _buildInfoRow('Company PAN', merchantData['kycDocs']?['companyPan'] != null &&
-                                                      merchantData['kycDocs']['companyPan'].isNotEmpty ?
-                                                      'Uploaded' : 'Not Uploaded'),
-                            _buildInfoRow('Business Registration', merchantData['kycDocs']?['businessReg'] != null &&
-                                                                merchantData['kycDocs']['businessReg'].isNotEmpty ?
-                                                                'Uploaded' : 'Not Uploaded'),
-                            _buildInfoRow('GST Certificate', merchantData['kycDocs']?['gst'] != null &&
-                                                          merchantData['kycDocs']['gst'].isNotEmpty ?
-                                                          'Uploaded' : 'Not Uploaded'),
-                          ],
-                        ),
-                        SizedBox(height: 16),
-                        _buildInfoCard(
-                          title: 'Account Status',
-                          children: [
-                            _buildInfoRow('Active Status', merchantData['isActive'] == true ? 'Active' : 'Inactive'),
-                            _buildInfoRow('KYC Verified', userData['isKycVerified'] == true ? 'Verified' : 'Pending'),
-                            _buildInfoRow('Next Settlement', merchantData['nextSettlementAt'] != null ?
-                                                          _formatTimestamp(merchantData['nextSettlementAt']) : 'Not Scheduled'),
-                          ],
-                        ),
-                      ],
-                    ),
-            ),
-          ),
+          const SizedBox(height: 16),
+          _buildInfoItem('Store ID', storeId),
+          _buildInfoItem('Service Type', serviceType),
+          if (createdAt != null)
+            _buildInfoItem('Created At', _formatTimestamp(createdAt)),
         ],
       ),
     );
   }
-}
 
-// Add this wave clipper class at the end of the file
-class WaveClipper extends CustomClipper<Path> {
-  @override
-  Path getClip(Size size) {
-    var path = Path();
-    path.lineTo(0, size.height - 40);
-    
-    var firstControlPoint = Offset(size.width / 4, size.height);
-    var firstEndPoint = Offset(size.width / 2.25, size.height - 30);
-    path.quadraticBezierTo(firstControlPoint.dx, firstControlPoint.dy,
-        firstEndPoint.dx, firstEndPoint.dy);
-    
-    var secondControlPoint = Offset(size.width - (size.width / 3.25), size.height - 65);
-    var secondEndPoint = Offset(size.width, size.height - 40);
-    path.quadraticBezierTo(secondControlPoint.dx, secondControlPoint.dy,
-        secondEndPoint.dx, secondEndPoint.dy);
-    
-    path.lineTo(size.width, 0);
-    path.close();
-    return path;
-  }
-
-  @override
-  bool shouldReclip(CustomClipper<Path> oldClipper) => false;
-}
-
-String _formatTimestamp(dynamic timestamp) {
-  if (timestamp is Timestamp) {
-    final date = timestamp.toDate();
-    return '${date.day}/${date.month}/${date.year}';
-  }
-  return 'Not Available';
-}
-
-Widget _buildInfoCard({required String title, required List<Widget> children}) {
-  return Card(
-    elevation: 2,
-    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-    child: Padding(
-      padding: const EdgeInsets.all(16.0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            title,
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-              color: Colors.blue.shade800,
+  Widget _buildTextField({
+    required TextEditingController controller,
+    required String label,
+    int maxLines = 1,
+    String? Function(String?)? validator,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: AppTextStyles.body.copyWith(color: Colors.white)),
+        const SizedBox(height: 8),
+        Container(
+          decoration: BoxDecoration(
+            color: AppColors.backgroundLight,
+            borderRadius: BorderRadius.circular(12),
+            boxShadow: [
+              BoxShadow(
+                color: AppColors.primaryColor.withOpacity(0.2),
+                blurRadius: 8,
+                spreadRadius: 1,
+              ),
+            ],
+          ),
+          child: TextFormField(
+            controller: controller,
+            maxLines: maxLines,
+            validator: validator,
+            style: AppTextStyles.body.copyWith(color: Colors.white),
+            decoration: InputDecoration(
+              hintText: 'Enter $label',
+              hintStyle: AppTextStyles.body.copyWith(color: Colors.grey[600]),
+              border: InputBorder.none,
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 16,
+              ),
             ),
           ),
-          Divider(),
-          ...children,
-        ],
-      ),
-    ),
+        ),
+      ],
     );
   }
 
-  Widget _buildInfoRow(String label, String value) {
+  Widget _buildInfoItem(String label, String value) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8.0),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
             label,
-            style: TextStyle(
-              fontWeight: FontWeight.w500,
-              color: Colors.grey.shade700,
-            ),
+            style: AppTextStyles.body.copyWith(color: Colors.grey[400]),
           ),
-          Text(
-            value,
-            style: TextStyle(
-              fontWeight: FontWeight.w500,
+          const SizedBox(width: 16),
+          Expanded(
+            child: Text(
+              value,
+              style: AppTextStyles.body.copyWith(
+                color: Colors.white,
+                fontWeight: FontWeight.w600,
+              ),
+              textAlign: TextAlign.right,
             ),
           ),
         ],
       ),
     );
   }
+}

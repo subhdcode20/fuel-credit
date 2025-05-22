@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:craditapp/constants.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/services.dart';
 import 'MerchantHomeScreen.dart';
 import 'DriverHomeScreen.dart';
 import 'pov_selection_screen.dart';
+import 'kyc_waiting_screen.dart';
 import 'dart:async';
 
 class OTPScreen extends StatefulWidget {
@@ -134,12 +136,23 @@ class _OTPScreenState extends State<OTPScreen> with SingleTickerProviderStateMix
                 context,
                 MaterialPageRoute(builder: (context) => MerchantHomeScreen(userData: userData)),
               );
-            } else if (userType == 'driver') {
-              // Navigate to Driver Home Screen
-              Navigator.pushReplacement(
-                context,
-                MaterialPageRoute(builder: (context) => DriverHomeScreen(userData: userData)),
-              );
+            } else if (userType == 'client') {
+              // Check KYC verification status for client users
+              final isKycVerified = userData['isKycVerified'] ?? false;
+              
+              if (isKycVerified) {
+                // KYC is verified, navigate to Driver Home Screen
+                Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute(builder: (context) => DriverHomeScreen(userData: userData)),
+                );
+              } else {
+                // KYC is not verified, navigate to Waiting Page
+                Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute(builder: (context) => KycWaitingScreen(userData: userData)),
+                );
+              }
             } else {
               // Handle unknown userType
               _showErrorSnackBar('Unknown user type');
@@ -532,8 +545,17 @@ class _OTPScreenState extends State<OTPScreen> with SingleTickerProviderStateMix
           color: focusNodes[index].hasFocus
               ? AppColors.primaryColor
               : Colors.white.withOpacity(0.3),
-          width: 1.5,
+          width: focusNodes[index].hasFocus ? 2 : 1,
         ),
+        boxShadow: focusNodes[index].hasFocus
+            ? [
+                BoxShadow(
+                  color: AppColors.primaryColor.withOpacity(0.3),
+                  blurRadius: 8,
+                  spreadRadius: 1,
+                ),
+              ]
+            : [],
       ),
       child: TextField(
         controller: otpControllers[index],
@@ -541,28 +563,27 @@ class _OTPScreenState extends State<OTPScreen> with SingleTickerProviderStateMix
         keyboardType: TextInputType.number,
         textAlign: TextAlign.center,
         maxLength: 1,
+        obscureText: true,
+        obscuringCharacter: '●',
         style: TextStyle(
           color: Colors.white,
-          fontSize: 20,
+          fontSize: 22,
           fontWeight: FontWeight.bold,
         ),
         decoration: InputDecoration(
-          counterText: "",
+          counterText: '',
           border: InputBorder.none,
           contentPadding: EdgeInsets.zero,
         ),
         onChanged: (value) {
+          // If a digit is entered, move to next field
           if (value.isNotEmpty) {
-            // Move to next field
             if (index < 5) {
               focusNodes[index + 1].requestFocus();
             } else {
-              // Last field, hide keyboard
-              FocusScope.of(context).unfocus();
+              // Last digit entered, hide keyboard
+              FocusManager.instance.primaryFocus?.unfocus();
             }
-          } else if (value.isEmpty && index > 0) {
-            // Move to previous field on backspace
-            focusNodes[index - 1].requestFocus();
           }
         },
       ),

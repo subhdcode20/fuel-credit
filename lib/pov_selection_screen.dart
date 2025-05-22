@@ -123,7 +123,7 @@ class POVSelectionScreen extends StatelessWidget {
                         // Driver Card
                         _buildRoleCard(
                           context,
-                          title: "Driver",
+                          title: "Client",
                           description: "I need fuel credits for my vehicle",
                           icon: Icons.directions_car,
                           color: Color(0xFF4C84AF),

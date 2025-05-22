@@ -31,7 +31,6 @@ dependencies:
   mobile_scanner: ^3.3.0
   lottie: ^2.6.0
   geolocator: ^9.0.2
-  geocoding:
 
 dev_dependencies:
   flutter_test:
